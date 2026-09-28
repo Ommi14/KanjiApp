@@ -92,7 +92,9 @@
   .vocabMeaning { font-size: 12px; color: var(--text-dim); }
 
   #bottombar {
-    flex: 0 0 auto; height: 34px; display: flex; align-items: center;
+    flex: 0 0 auto;
+    height: calc(34px + env(safe-area-inset-bottom));
+    display: flex; align-items: center;
     justify-content: space-between; padding: 0 16px 4px;
     font-size: 12px; color: var(--text-dim);
     padding-bottom: env(safe-area-inset-bottom);
