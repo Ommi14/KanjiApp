@@ -146,6 +146,32 @@
 
   #errorBox { padding: 30px; color: var(--warn); font-size: 14px; }
 
+  /* ---------- word view + word writing ---------- */
+  .vocabItem { cursor: pointer; }
+  .vocabWord.wordLink { border-bottom: 1px dotted var(--accent); }
+  .wordBody {
+    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); text-align: center;
+  }
+  #wordBig {
+    color: var(--kanji); line-height: 1.15; cursor: pointer; white-space: nowrap;
+    font-family: "Hiragino Mincho ProN", "Hiragino Kaku Gothic ProN", "Noto Serif CJK JP", "Noto Sans CJK JP", "Hiragino Sans", serif;
+  }
+  #wordReading { font-size: 22px; color: var(--kun); margin-top: 10px; }
+  #wordMeaning { font-size: 16px; color: var(--text); margin-top: 6px; max-width: 90vw; }
+  #wordKanji { margin-top: 18px; justify-content: center; }
+  #wordKanji .chip { cursor: pointer; }
+  #wordKanji .wkChar { font-size: 18px; margin-right: 4px; }
+  #wordWriteBtn { margin-top: 18px; color: var(--kun); border-color: var(--kun); cursor: pointer; }
+  #wordTapHint { font-size: 12px; color: var(--text-dim); margin-top: 8px; }
+  #writeWordProgress {
+    font-size: 24px; letter-spacing: 3px; margin-bottom: 2px; display: none;
+    font-family: "Hiragino Mincho ProN", "Noto Serif CJK JP", "Noto Sans CJK JP", serif;
+  }
+  #writeWordProgress .wcDone { color: var(--kun); }
+  #writeWordProgress .wcCur { color: var(--accent); border-bottom: 2px solid var(--accent); }
+  #writeWordProgress .wcTodo { color: var(--text-dim); }
+
   /* ---------- pronunciation (text-to-speech) ---------- */
   .say { cursor: pointer; border-bottom: 1px dotted currentColor; }
   .sayBtn { cursor: pointer; display: inline-block; padding: 0 6px; font-size: 15px; vertical-align: middle; }
@@ -264,7 +290,7 @@
         <div class="chip" data-mode="trace">Trace</div>
         <div class="chip" data-mode="recall">From memory</div>
       </div>
-      <div id="writePrompt"><div id="writePromptMeaning"></div><div id="writePromptReading"></div></div>
+      <div id="writePrompt"><div id="writeWordProgress"></div><div id="writePromptMeaning"></div><div id="writePromptReading"></div></div>
       <svg id="writePad" viewBox="0 0 109 109" xmlns="http://www.w3.org/2000/svg">
         <g id="wGrid">
           <line x1="54.5" y1="2" x2="54.5" y2="107"/><line x1="2" y1="54.5" x2="107" y2="54.5"/>
@@ -283,6 +309,19 @@
         <div class="chip" id="wNextBtn">Next &rsaquo;</div>
       </div>
       <div id="writeCredit">Stroke order data: KanjiVG &copy; Ulrich Apel, CC BY-SA 3.0</div>
+    </div>
+  </div>
+
+  <!-- WORD overlay (big view of a vocabulary word) -->
+  <div class="overlay" id="wordOverlay">
+    <div class="overlayHeader"><h2>Word</h2><span class="closeBtn" id="wordCloseBtn">Done</span></div>
+    <div class="wordBody">
+      <div id="wordBig"></div>
+      <div id="wordReading"></div>
+      <div id="wordMeaning"></div>
+      <div class="chipRow" id="wordKanji"></div>
+      <div class="chip" id="wordWriteBtn">&#9997; Practice writing this word</div>
+      <div id="wordTapHint">or tap the big word</div>
     </div>
   </div>
 
@@ -447,8 +486,9 @@ function renderBrowse() {
 
   const vocab = raw.vocab;
   if (vocab && vocab.length) {
-    $("vocabList").innerHTML = vocab.map(item => `<div class="vocabItem">
-      <span class="vocabWord say" data-say="${escapeHtml(item.reading || item.word)}">${escapeHtml(item.word)}</span>
+    state.vocab = vocab;
+    $("vocabList").innerHTML = vocab.map((item, i) => `<div class="vocabItem" data-vi="${i}">
+      <span class="vocabWord wordLink">${escapeHtml(item.word)}</span>
       <span class="vocabReading">（${escapeHtml(item.reading)}）</span>
       <span class="sayBtn" data-say="${escapeHtml(item.reading || item.word)}">&#128264;</span>
       <div class="vocabMeaning">${escapeHtml(item.meaning)}</div>
@@ -502,6 +542,7 @@ function escapeHtml(s) {
 function closeOverlays() {
   $("menuOverlay").classList.remove("active");
   $("searchOverlay").classList.remove("active");
+  $("wordOverlay").classList.remove("active");
   if ($("writeOverlay").classList.contains("active")) {
     $("writeOverlay").classList.remove("active");
     write.token++;          // stop any running animation
@@ -819,8 +860,9 @@ function setWriteStatus(text, cls) {
 }
 
 // ---- screen ----
-function openWrite(char) {
+function openWrite(char, keepWord) {
   if (!char) return;
+  if (!keepWord) write.word = null;   // plain kanji practice (from the top-bar button)
   state.screen = "write";
   write.char = char;
   write.ready = false;
@@ -861,15 +903,70 @@ function buildStrokes(data) {
 }
 
 function renderWriteHeader() {
-  const raw = KANJI_DATA[write.char] || {};
   const recall = write.mode === "recall";
-  $("writeTitle").textContent = recall ? "Write from memory" : "Write " + write.char;
-  $("writePromptMeaning").textContent = getMeanings(raw).slice(0, 3).join(", ") || " ";
-  const readings = [...getOn(raw).slice(0, 2), ...getKun(raw).slice(0, 2)];
-  $("writePromptReading").innerHTML = sayListHtml(readings) +
-    (readings.length ? ` <span class="sayBtn" data-say="${escapeHtml(sayAll(readings))}">&#128264;</span>` : "");
+  const w = write.word;
+  const prog = $("writeWordProgress");
+  if (w) {
+    // Word practice: show the word with the current character highlighted.
+    // In "From memory" mode the characters not yet written are hidden.
+    $("writeTitle").textContent = recall && !w.finished ? "Write the word from memory" : "Write " + w.text;
+    prog.style.display = "block";
+    prog.innerHTML = w.chars.map((c, k) => {
+      const cls = w.finished || k < w.i ? "wcDone" : k === w.i ? "wcCur" : "wcTodo";
+      const shown = recall && !w.finished && k >= w.i ? "＿" : c;
+      return `<span class="${cls}">${escapeHtml(shown)}</span>`;
+    }).join("");
+    $("writePromptMeaning").textContent = w.meaning || " ";
+    $("writePromptReading").innerHTML = escapeHtml(w.reading) +
+      ` <span class="sayBtn" data-say="${escapeHtml(w.reading || w.text)}">&#128264;</span>`;
+    const nb = $("wNextBtn");
+    if (w.finished) { nb.innerHTML = "&#8634; Word again"; nb.style.display = ""; }
+    else if (w.i < w.chars.length - 1) { nb.innerHTML = "Next char &rsaquo;"; nb.style.display = ""; }
+    else nb.style.display = "none";
+  } else {
+    const raw = KANJI_DATA[write.char] || {};
+    $("writeTitle").textContent = recall ? "Write from memory" : "Write " + write.char;
+    prog.style.display = "none";
+    $("writePromptMeaning").textContent = getMeanings(raw).slice(0, 3).join(", ") || " ";
+    const readings = [...getOn(raw).slice(0, 2), ...getKun(raw).slice(0, 2)];
+    $("writePromptReading").innerHTML = sayListHtml(readings) +
+      (readings.length ? ` <span class="sayBtn" data-say="${escapeHtml(sayAll(readings))}">&#128264;</span>` : "");
+    $("wNextBtn").innerHTML = "Next &rsaquo;";
+    $("wNextBtn").style.display = "";
+  }
   document.querySelectorAll("#writeModeChips .chip").forEach(c =>
     c.classList.toggle("activeChip", c.dataset.mode === write.mode));
+}
+
+// ---- word view + word practice ----
+function openWordView(item) {
+  if (!item || !item.word) return;
+  state.word = item;
+  state.screen = "word";
+  const n = [...item.word].length;
+  $("wordBig").textContent = item.word;
+  $("wordBig").style.fontSize = "min(" + Math.floor(86 / n) + "vw, 32vh)";
+  $("wordReading").innerHTML = escapeHtml(item.reading || "") +
+    ` <span class="sayBtn" data-say="${escapeHtml(item.reading || item.word)}">&#128264;</span>`;
+  $("wordMeaning").textContent = item.meaning || "";
+  $("wordKanji").innerHTML = [...new Set([...item.word])].filter(c => KANJI_DATA[c]).map(c =>
+    `<div class="chip" data-goto="${c}"><span class="wkChar">${c}</span>${escapeHtml(getMeanings(KANJI_DATA[c])[0] || "")}</div>`
+  ).join("");
+  $("wordOverlay").classList.add("active");
+}
+function startWordWrite() {
+  const item = state.word;
+  if (!item) return;
+  const chars = [...item.word];
+  write.word = { text: item.word, reading: item.reading || "", meaning: item.meaning || "",
+                 chars, i: 0, mistakes: 0, finished: false };
+  openWrite(chars[0], true);
+}
+function restartWord() {
+  const w = write.word;
+  if (!w) return;
+  w.i = 0; w.mistakes = 0; w.finished = false;
+  openWrite(w.chars[0], true);
 }
 
 function resetWrite() {
@@ -975,6 +1072,28 @@ function finishWrite() {
   clearEl("wStart");
   write.strokes.forEach(s => s.el.classList.remove("nextStroke"));
   saveWriteResult(write.char, write.mode, write.mistakes);
+  const w = write.word;
+  if (w) {
+    w.mistakes += write.mistakes;
+    if (w.i < w.chars.length - 1) {
+      // move on to the next character of the word after a short pause
+      setWriteStatus("✓ " + write.char + " — next character…", "ok");
+      const token = write.token;
+      setTimeout(() => {
+        if (token !== write.token) return;
+        w.i++;
+        openWrite(w.chars[w.i], true);
+      }, 900);
+      return;
+    }
+    w.finished = true;
+    renderWriteHeader();
+    const wm = w.mistakes;
+    setWriteStatus(wm === 0 ? "完璧！ " + w.text + " — the whole word, no mistakes."
+      : "Word done: " + w.text + " — " + wm + " mistake" + (wm > 1 ? "s" : "") + ". Tap Word again to retry.", "ok");
+    speak(w.reading || w.text);
+    return;
+  }
   const m = write.mistakes;
   let msg = m === 0 ? "完璧！ Perfect — every stroke right." : "Done! " + m + " mistake" + (m > 1 ? "s" : "") + ".";
   if (write.mode === "trace") msg += " Try From memory next.";
@@ -1041,20 +1160,53 @@ function inkEnd() {
 })();
 
 $("writeBtn").addEventListener("click", () => openWrite(currentChar()));
-$("writeCloseBtn").addEventListener("click", closeOverlays);
+$("writeCloseBtn").addEventListener("click", () => {
+  if (write.word && $("wordOverlay").classList.contains("active")) {
+    // came from a word: go back to the big word view
+    $("writeOverlay").classList.remove("active");
+    write.token++;
+    state.screen = "word";
+  } else {
+    closeOverlays();
+  }
+});
 $("writeModeChips").addEventListener("click", (e) => {
   const chip = e.target.closest(".chip");
   if (!chip) return;
   write.mode = chip.dataset.mode;
-  resetWrite();
+  if (write.word) restartWord(); else resetWrite();
+});
+$("vocabList").addEventListener("click", (e) => {
+  if (e.target.closest("[data-say]")) return;    // the speaker icon just plays the sound
+  const it = e.target.closest(".vocabItem");
+  if (!it || !state.vocab) return;
+  openWordView(state.vocab[+it.dataset.vi]);
+});
+$("wordBig").addEventListener("click", startWordWrite);
+$("wordWriteBtn").addEventListener("click", startWordWrite);
+$("wordCloseBtn").addEventListener("click", closeOverlays);
+$("wordKanji").addEventListener("click", (e) => {
+  const chip = e.target.closest("[data-goto]");
+  if (chip) gotoChar(chip.dataset.goto);
 });
 $("wHintBtn").addEventListener("click", () => {
   if (!write.ready || write.mode === "watch" || write.next >= write.strokes.length) return;
   if (write.mode === "recall") write.mistakes++;   // peeking counts in memory mode
   showHint();
 });
-$("wRestartBtn").addEventListener("click", resetWrite);
-$("wNextBtn").addEventListener("click", () => { move(1); openWrite(currentChar()); });
+$("wRestartBtn").addEventListener("click", () => {
+  if (write.word && write.word.finished) restartWord(); else resetWrite();
+});
+$("wNextBtn").addEventListener("click", () => {
+  const w = write.word;
+  if (w) {
+    if (w.finished) restartWord();
+    else if (w.i < w.chars.length - 1) { w.i++; openWrite(w.chars[w.i], true); }
+    return;
+  }
+  move(1);
+  openWrite(currentChar());
+});
 
 // initial paint
 try {
