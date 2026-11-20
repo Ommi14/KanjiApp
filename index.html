@@ -144,12 +144,46 @@
   #noResults { color: var(--text-dim); font-size: 13px; padding: 20px 4px; text-align: center; }
 
   #errorBox { padding: 30px; color: var(--warn); font-size: 14px; }
+
+  /* ---------- writing practice ---------- */
+  #topbar .writeBtn { color: var(--kun); font-size: 15px; }
+  .writeBody {
+    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center;
+    padding: 10px 14px calc(8px + env(safe-area-inset-bottom));
+  }
+  .writeBody .chipRow { justify-content: center; }
+  .writeBody .chip { padding: 7px 13px; }
+  #writePrompt { text-align: center; margin-top: 8px; min-height: 38px; }
+  #writePromptMeaning { font-size: 16px; font-weight: 600; color: var(--text); }
+  #writePromptReading { font-size: 13px; color: var(--text-dim); margin-top: 2px; }
+  #writePad {
+    width: max(200px, min(92vw, calc(100vh - 300px)));
+    height: max(200px, min(92vw, calc(100vh - 300px)));
+    background: var(--bg-panel); border: 1px solid var(--border); border-radius: 12px;
+    margin: 8px 0 6px; touch-action: none; flex: 0 0 auto;
+  }
+  #writePad path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  #wGrid line { stroke: var(--border); stroke-width: 0.5; stroke-dasharray: 2 2; }
+  #wGuide path { stroke: #34343f; stroke-width: 3.2; }
+  #wGuide path.nextStroke { stroke: #5c5c74; }
+  #wDone path { stroke: var(--kanji); stroke-width: 3.4; }
+  #wHint path { stroke: var(--accent); stroke-width: 3.8; }
+  #wInk { stroke: var(--on); stroke-width: 3.4; }
+  #wInk.bad { stroke: var(--warn); }
+  #wNums text { fill: var(--text-dim); font-size: 7px; font-family: -apple-system, sans-serif; }
+  #wStart circle { fill: var(--accent); }
+  #wStart text { fill: var(--bg); font-size: 5px; font-weight: 700; font-family: -apple-system, sans-serif; text-anchor: middle; }
+  #writeStatus { font-size: 14px; min-height: 20px; text-align: center; margin-bottom: 8px; color: var(--text-dim); }
+  #writeStatus.ok { color: var(--kun); }
+  #writeStatus.bad { color: var(--warn); }
+  #writeCredit { font-size: 10px; color: var(--text-dim); opacity: 0.6; margin-top: auto; padding-top: 8px; }
 </style>
 </head>
 <body>
 <div id="app">
   <div id="topbar">
     <span id="sortLabel">All (order)</span>
+    <span class="writeBtn" id="writeBtn">&#9997; Write</span>
     <span class="menuBtn" id="menuTapZone">&#9776; tap for menu</span>
   </div>
 
@@ -207,6 +241,37 @@
       <input class="searchBox" id="searchInput" type="text" placeholder="meaning or reading, e.g. water"
              autocapitalize="off" autocorrect="off" spellcheck="false">
       <div id="searchResults" style="margin-top:14px;"></div>
+    </div>
+  </div>
+
+  <!-- WRITE (stroke-order practice) overlay -->
+  <div class="overlay" id="writeOverlay">
+    <div class="overlayHeader"><h2 id="writeTitle">Write</h2><span class="closeBtn" id="writeCloseBtn">Done</span></div>
+    <div class="writeBody">
+      <div class="chipRow" id="writeModeChips">
+        <div class="chip" data-mode="watch">&#9654; Watch</div>
+        <div class="chip" data-mode="trace">Trace</div>
+        <div class="chip" data-mode="recall">From memory</div>
+      </div>
+      <div id="writePrompt"><div id="writePromptMeaning"></div><div id="writePromptReading"></div></div>
+      <svg id="writePad" viewBox="0 0 109 109" xmlns="http://www.w3.org/2000/svg">
+        <g id="wGrid">
+          <line x1="54.5" y1="2" x2="54.5" y2="107"/><line x1="2" y1="54.5" x2="107" y2="54.5"/>
+        </g>
+        <g id="wGuide"></g>
+        <g id="wNums"></g>
+        <g id="wDone"></g>
+        <g id="wHint"></g>
+        <g id="wStart"></g>
+        <path id="wInk" d=""/>
+      </svg>
+      <div id="writeStatus"></div>
+      <div class="chipRow">
+        <div class="chip" id="wHintBtn">Hint</div>
+        <div class="chip" id="wRestartBtn">&#8634; Restart</div>
+        <div class="chip" id="wNextBtn">Next &rsaquo;</div>
+      </div>
+      <div id="writeCredit">Stroke order data: KanjiVG &copy; Ulrich Apel, CC BY-SA 3.0</div>
     </div>
   </div>
 
@@ -349,6 +414,8 @@ function renderBrowse() {
   if (raw.grade != null) tags.push("Grade " + raw.grade);
   if (raw.jlpt_new != null) tags.push("JLPT N" + raw.jlpt_new);
   if (raw.freq != null) tags.push("Freq #" + raw.freq);
+  const ws = loadWriteStats()[char];
+  if (ws) tags.push(ws.perfect ? "&#9997; Mastered" : "&#9997; Practiced " + ws.n + "&times;");
   $("tags").innerHTML = tags.map(t => `<span class="tag">${t}</span>`).join("");
 
   const radicals = getRadicals(raw);
@@ -419,6 +486,11 @@ function escapeHtml(s) {
 function closeOverlays() {
   $("menuOverlay").classList.remove("active");
   $("searchOverlay").classList.remove("active");
+  if ($("writeOverlay").classList.contains("active")) {
+    $("writeOverlay").classList.remove("active");
+    write.token++;          // stop any running animation
+    renderBrowse();         // refresh the "Practiced/Mastered" tag
+  }
   state.screen = "browse";
 }
 function openMenu() {
@@ -520,6 +592,373 @@ document.addEventListener("touchmove", (e) => {
   if (!e.target.closest(".overlayBody") && !e.target.closest("#detailPanel")) e.preventDefault();
 }, { passive: false });
 document.addEventListener("gesturestart", (e) => e.preventDefault());
+
+// ---------------- writing practice (stroke order) ----------------
+// Stroke paths come from KanjiVG (109x109 units, strokes in the correct order and
+// direction). Fetched on first use per kanji, then cached in localStorage.
+const KVG_URLS = [
+  (hex) => "https://cdn.jsdelivr.net/gh/KanjiVG/kanjivg@master/kanji/" + hex + ".svg",
+  (hex) => "https://raw.githubusercontent.com/KanjiVG/kanjivg/master/kanji/" + hex + ".svg"
+];
+const SVGNS = "http://www.w3.org/2000/svg";
+const WRITE_STATS_KEY = "kanjiWriteStats";
+const N_PTS = 32;      // points each stroke is resampled to for comparison
+const TOL = 14;        // max average distance (in 109-unit space) to accept a stroke
+const END_TOL = 22;    // max distance for the start and end points
+
+const write = {
+  char: null, strokes: [], nums: [], mode: "trace",
+  next: 0, misses: 0, mistakes: 0, ready: false, token: 0, drawing: null
+};
+
+function kvgHex(char) { return char.codePointAt(0).toString(16).padStart(5, "0"); }
+
+function parseKvg(svgText) {
+  const strokes = [], nums = [];
+  const pathRe = /<path\b[^>]*?\sd="([^"]+)"/g;
+  const numRe = /<text[^>]*matrix\(1 0 0 1 ([\d.\-]+) ([\d.\-]+)\)"[^>]*>(\d+)<\/text>/g;
+  let m;
+  while ((m = pathRe.exec(svgText))) strokes.push(m[1]);
+  while ((m = numRe.exec(svgText))) nums.push({ x: +m[1], y: +m[2], n: +m[3] });
+  return { strokes, nums };
+}
+
+async function loadStrokeData(char) {
+  const hex = kvgHex(char);
+  const key = "kvg:" + hex;
+  try {
+    const cached = localStorage.getItem(key);
+    if (cached) return JSON.parse(cached);
+  } catch (e) {}
+  let lastErr = null;
+  for (const url of KVG_URLS) {
+    try {
+      const res = await fetch(url(hex));
+      if (!res.ok) { lastErr = new Error("HTTP " + res.status); continue; }
+      const data = parseKvg(await res.text());
+      if (!data.strokes.length) { lastErr = new Error("no strokes"); continue; }
+      try { localStorage.setItem(key, JSON.stringify(data)); } catch (e) {}
+      return data;
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error("not found");
+}
+
+function loadWriteStats() {
+  try { return JSON.parse(localStorage.getItem(WRITE_STATS_KEY)) || {}; } catch (e) { return {}; }
+}
+function saveWriteResult(char, mode, mistakes) {
+  const stats = loadWriteStats();
+  const s = stats[char] || { n: 0, perfect: false };
+  s.n += 1;
+  if (mode === "recall" && mistakes === 0) s.perfect = true;
+  stats[char] = s;
+  try { localStorage.setItem(WRITE_STATS_KEY, JSON.stringify(stats)); } catch (e) {}
+}
+
+// ---- geometry ----
+function dist(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1]); }
+function resample(pts, n) {
+  if (pts.length < 2) return Array.from({ length: n }, () => pts[0]);
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + dist(pts[i - 1], pts[i]));
+  const total = cum[cum.length - 1];
+  if (total === 0) return Array.from({ length: n }, () => pts[0]);
+  const out = [];
+  let j = 0;
+  for (let k = 0; k < n; k++) {
+    const t = total * k / (n - 1);
+    while (j < pts.length - 2 && cum[j + 1] < t) j++;
+    const seg = cum[j + 1] - cum[j];
+    const u = seg ? (t - cum[j]) / seg : 0;
+    out.push([pts[j][0] + (pts[j + 1][0] - pts[j][0]) * u, pts[j][1] + (pts[j + 1][1] - pts[j][1]) * u]);
+  }
+  return out;
+}
+function pathLength(pts) {
+  let s = 0;
+  for (let i = 1; i < pts.length; i++) s += dist(pts[i - 1], pts[i]);
+  return s;
+}
+function meanDist(a, b) {
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += dist(a[i], b[i]);
+  return s / a.length;
+}
+// How well user points u (already resampled) fit stroke s. Returns avg distance, or Infinity if ends are off.
+function fit(u, s) {
+  if (dist(u[0], s.pts[0]) > END_TOL || dist(u[u.length - 1], s.pts[s.pts.length - 1]) > END_TOL) return Infinity;
+  return meanDist(u, s.pts);
+}
+
+// ---- svg helpers ----
+function svgEl(tag, attrs, parent) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(el);
+  return el;
+}
+function clearEl(id) { const el = $(id); while (el.firstChild) el.removeChild(el.firstChild); }
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function animatePath(el, len, ms, token) {
+  return new Promise(resolve => {
+    el.style.strokeDasharray = len + " " + (len + 2);
+    el.style.strokeDashoffset = len;
+    const t0 = performance.now();
+    function step(now) {
+      if (token !== write.token) { resolve(false); return; }
+      const p = Math.min(1, (now - t0) / ms);
+      el.style.strokeDashoffset = len * (1 - p);
+      if (p < 1) requestAnimationFrame(step); else resolve(true);
+    }
+    requestAnimationFrame(step);
+  });
+}
+function strokeMs(s) { return 250 + s.len * 11; }
+
+function setWriteStatus(text, cls) {
+  const el = $("writeStatus");
+  el.textContent = text;
+  el.className = cls || "";
+}
+
+// ---- screen ----
+function openWrite(char) {
+  if (!char) return;
+  state.screen = "write";
+  write.char = char;
+  write.ready = false;
+  write.strokes = [];
+  write.token++;
+  const token = write.token;
+  ["wGuide", "wNums", "wDone", "wHint", "wStart"].forEach(clearEl);
+  $("wInk").setAttribute("d", "");
+  $("writeOverlay").classList.add("active");
+  renderWriteHeader();
+  setWriteStatus("Loading stroke order…");
+  loadStrokeData(char).then(data => {
+    if (token !== write.token) return;
+    buildStrokes(data);
+    write.ready = true;
+    resetWrite();
+  }).catch(() => {
+    if (token !== write.token) return;
+    setWriteStatus("Couldn't load stroke data for " + char + ". An internet connection is needed the first time.", "bad");
+  });
+}
+
+function buildStrokes(data) {
+  // Guide paths are drawn in the visible pad, so they double as geometry for sampling.
+  const guide = $("wGuide");
+  write.strokes = data.strokes.map(d => {
+    const el = svgEl("path", { d }, guide);
+    const len = el.getTotalLength();
+    const pts = [];
+    for (let k = 0; k < N_PTS; k++) {
+      const p = el.getPointAtLength(len * k / (N_PTS - 1));
+      pts.push([p.x, p.y]);
+    }
+    return { d, el, len, pts };
+  });
+  const nums = $("wNums");
+  data.nums.forEach(n => { svgEl("text", { x: n.x, y: n.y }, nums).textContent = n.n; });
+}
+
+function renderWriteHeader() {
+  const raw = KANJI_DATA[write.char] || {};
+  const recall = write.mode === "recall";
+  $("writeTitle").textContent = recall ? "Write from memory" : "Write " + write.char;
+  $("writePromptMeaning").textContent = getMeanings(raw).slice(0, 3).join(", ") || " ";
+  const readings = [...getOn(raw).slice(0, 2), ...getKun(raw).slice(0, 2)];
+  $("writePromptReading").textContent = readings.join("、 ");
+  document.querySelectorAll("#writeModeChips .chip").forEach(c =>
+    c.classList.toggle("activeChip", c.dataset.mode === write.mode));
+}
+
+function resetWrite() {
+  write.token++;
+  write.next = 0; write.misses = 0; write.mistakes = 0; write.drawing = null;
+  ["wDone", "wHint", "wStart"].forEach(clearEl);
+  $("wInk").setAttribute("d", "");
+  $("wInk").classList.remove("bad");
+  renderWriteHeader();
+  if (!write.ready) return;
+  $("wGuide").style.visibility = write.mode === "recall" ? "hidden" : "visible";
+  $("wNums").style.visibility = write.mode === "watch" ? "visible" : "hidden";
+  updateNextMarker();
+  if (write.mode === "watch") playDemo();
+  else setWriteStatus("Stroke 1 of " + write.strokes.length +
+    (write.mode === "trace" ? " — start at the blue dot" : ""));
+}
+
+async function playDemo() {
+  const token = write.token;
+  setWriteStatus("Watch the stroke order (" + write.strokes.length + " strokes)…");
+  await wait(300);
+  for (let i = 0; i < write.strokes.length; i++) {
+    if (token !== write.token) return;
+    const s = write.strokes[i];
+    const el = svgEl("path", { d: s.d }, $("wDone"));
+    if (!(await animatePath(el, s.len, strokeMs(s), token))) return;
+    await wait(150);
+  }
+  if (token === write.token) setWriteStatus("Now tap Trace and write it yourself.", "ok");
+}
+
+function updateNextMarker() {
+  clearEl("wStart");
+  write.strokes.forEach((s, i) => s.el.classList.toggle("nextStroke", write.mode === "trace" && i === write.next));
+  if (write.mode !== "trace" || write.next >= write.strokes.length) return;
+  const p = write.strokes[write.next].pts[0];
+  const g = $("wStart");
+  svgEl("circle", { cx: p[0], cy: p[1], r: 3.6 }, g);
+  svgEl("text", { x: p[0], y: p[1] + 1.8 }, g).textContent = write.next + 1;
+}
+
+async function showHint() {
+  if (!write.ready || write.mode === "watch" || write.next >= write.strokes.length) return;
+  const token = write.token;
+  const s = write.strokes[write.next];
+  clearEl("wHint");
+  const el = svgEl("path", { d: s.d }, $("wHint"));
+  if (!(await animatePath(el, s.len, strokeMs(s), token))) return;
+  await wait(500);
+  if (token === write.token && el.parentNode) el.parentNode.removeChild(el);
+}
+
+function judgeStroke(userPts) {
+  const total = write.strokes.length;
+  const idx = write.next;
+  const u = resample(userPts, N_PTS);
+  const userLen = pathLength(userPts);
+  const exp = write.strokes[idx];
+
+  // best match among strokes not yet written
+  let best = -1, bestFit = Infinity;
+  for (let j = idx; j < total; j++) {
+    const f = fit(u, write.strokes[j]);
+    if (f < bestFit) { bestFit = f; best = j; }
+  }
+  const expFit = fit(u, exp);
+
+  if (expFit < TOL && !(best !== idx && bestFit < TOL && bestFit < expFit * 0.6)) {
+    // correct stroke, correct direction
+    svgEl("path", { d: exp.d }, $("wDone"));
+    clearEl("wHint");
+    write.next++; write.misses = 0;
+    if (write.next >= total) { finishWrite(); return true; }
+    updateNextMarker();
+    setWriteStatus("✓ Stroke " + (idx + 1) + " — now stroke " + (write.next + 1) + " of " + total, "ok");
+    return true;
+  }
+
+  // a tap / accidental touch: ignore without counting a mistake
+  if (userLen < 3) return null;
+
+  write.mistakes++; write.misses++;
+  const reversed = resample(userPts.slice().reverse(), N_PTS);
+  let msg;
+  if (fit(reversed, exp) < TOL) {
+    msg = "Wrong direction — stroke " + (idx + 1) + " goes the other way.";
+  } else if (best !== idx && bestFit < TOL) {
+    msg = "Wrong order — that's stroke " + (best + 1) + ". Write stroke " + (idx + 1) + " first.";
+  } else {
+    let revBest = -1;
+    for (let j = idx + 1; j < total && revBest < 0; j++) if (fit(reversed, write.strokes[j]) < TOL) revBest = j;
+    msg = revBest >= 0
+      ? "Wrong order and direction — that looks like stroke " + (revBest + 1) + " backwards."
+      : "Not quite — try stroke " + (idx + 1) + " again.";
+  }
+  if (write.misses >= 2) { msg += " Here's how it goes:"; showHint(); }
+  setWriteStatus(msg, "bad");
+  return false;
+}
+
+function finishWrite() {
+  clearEl("wStart");
+  write.strokes.forEach(s => s.el.classList.remove("nextStroke"));
+  saveWriteResult(write.char, write.mode, write.mistakes);
+  const m = write.mistakes;
+  let msg = m === 0 ? "完璧！ Perfect — every stroke right." : "Done! " + m + " mistake" + (m > 1 ? "s" : "") + ".";
+  if (write.mode === "trace") msg += " Try From memory next.";
+  else if (m > 0) msg += " Tap Restart to try again.";
+  setWriteStatus(msg, "ok");
+  if (write.mode === "recall") $("writeTitle").textContent = "Write " + write.char;
+}
+
+// ---- drawing input (touch + mouse) ----
+function padPoint(clientX, clientY) {
+  const pad = $("writePad");
+  const pt = pad.createSVGPoint();
+  pt.x = clientX; pt.y = clientY;
+  const p = pt.matrixTransform(pad.getScreenCTM().inverse());
+  return [p.x, p.y];
+}
+function inkStart(x, y) {
+  if (!write.ready || write.mode === "watch" || write.next >= write.strokes.length) return;
+  write.drawing = [padPoint(x, y)];
+  const ink = $("wInk");
+  ink.classList.remove("bad");
+  ink.setAttribute("d", "M" + write.drawing[0].join(" "));
+}
+function inkMove(x, y) {
+  if (!write.drawing) return;
+  const p = padPoint(x, y);
+  const last = write.drawing[write.drawing.length - 1];
+  if (dist(p, last) < 0.6) return;
+  write.drawing.push(p);
+  $("wInk").setAttribute("d", "M" + write.drawing.map(q => q[0].toFixed(1) + " " + q[1].toFixed(1)).join(" L"));
+}
+function inkEnd() {
+  if (!write.drawing) return;
+  const pts = write.drawing;
+  write.drawing = null;
+  const ink = $("wInk");
+  const ok = judgeStroke(pts);
+  if (ok === false) {
+    ink.classList.add("bad");
+    const token = write.token;
+    setTimeout(() => { if (token === write.token && !write.drawing) ink.setAttribute("d", ""); }, 350);
+  } else {
+    ink.setAttribute("d", "");
+  }
+}
+(function wireWritePad() {
+  const pad = $("writePad");
+  pad.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    if (e.touches.length > 1) return;
+    const t = e.changedTouches[0];
+    inkStart(t.clientX, t.clientY);
+  }, { passive: false });
+  pad.addEventListener("touchmove", (e) => {
+    e.preventDefault();
+    const t = e.changedTouches[0];
+    inkMove(t.clientX, t.clientY);
+  }, { passive: false });
+  pad.addEventListener("touchend", (e) => { e.preventDefault(); inkEnd(); }, { passive: false });
+  pad.addEventListener("touchcancel", () => { write.drawing = null; $("wInk").setAttribute("d", ""); });
+  pad.addEventListener("mousedown", (e) => { e.preventDefault(); inkStart(e.clientX, e.clientY); });
+  window.addEventListener("mousemove", (e) => inkMove(e.clientX, e.clientY));
+  window.addEventListener("mouseup", inkEnd);
+})();
+
+$("writeBtn").addEventListener("click", () => openWrite(currentChar()));
+$("writeCloseBtn").addEventListener("click", closeOverlays);
+$("writeModeChips").addEventListener("click", (e) => {
+  const chip = e.target.closest(".chip");
+  if (!chip) return;
+  write.mode = chip.dataset.mode;
+  resetWrite();
+});
+$("wHintBtn").addEventListener("click", () => {
+  if (!write.ready || write.mode === "watch" || write.next >= write.strokes.length) return;
+  if (write.mode === "recall") write.mistakes++;   // peeking counts in memory mode
+  showHint();
+});
+$("wRestartBtn").addEventListener("click", resetWrite);
+$("wNextBtn").addEventListener("click", () => { move(1); openWrite(currentChar()); });
 
 // initial paint
 try {
