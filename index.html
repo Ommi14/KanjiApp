@@ -146,6 +146,16 @@
 
   #errorBox { padding: 30px; color: var(--warn); font-size: 14px; }
 
+  /* ---------- pronunciation (text-to-speech) ---------- */
+  .say { cursor: pointer; border-bottom: 1px dotted currentColor; }
+  .sayBtn { cursor: pointer; display: inline-block; padding: 0 6px; font-size: 15px; vertical-align: middle; }
+  .say.speaking, .sayBtn.speaking { opacity: 0.5; }
+  #toast {
+    position: fixed; left: 50%; bottom: calc(50px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    max-width: 90vw; background: var(--bg-panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 14px; font-size: 13px; z-index: 50; display: none; text-align: center;
+  }
+
   /* ---------- writing practice ---------- */
   #topbar .writeBtn { color: var(--kun); font-size: 15px; }
   .writeBody {
@@ -196,13 +206,13 @@
     </div>
     <div id="detailPanel">
       <div id="meaning">&nbsp;</div>
-      <div class="readingRow">ON'YOMI</div>
+      <div class="readingRow">ON'YOMI <span class="sayBtn" id="onSayAll">&#128264;</span></div>
       <div class="readingVal on" id="onYomi">&nbsp;</div>
-      <div class="readingRow">KUN'YOMI</div>
+      <div class="readingRow">KUN'YOMI <span class="sayBtn" id="kunSayAll">&#128264;</span></div>
       <div class="readingVal kun" id="kunYomi">&nbsp;</div>
       <div id="tags"></div>
       <div id="exampleBlock" style="display:none;">
-        <div class="readingRow">EXAMPLE</div>
+        <div class="readingRow">EXAMPLE <span class="sayBtn" id="exampleSay">&#128264;</span></div>
         <div id="exampleJp"></div>
         <div id="exampleEn"></div>
       </div>
@@ -276,6 +286,7 @@
     </div>
   </div>
 
+  <div id="toast"></div>
   <div id="errorBox" style="display:none;"></div>
 </div>
 
@@ -407,8 +418,10 @@ function renderBrowse() {
   const meanings = getMeanings(raw);
   $("meaning").textContent = meanings.length ? meanings.join(", ") : "(no meaning data)";
   const onList = getOn(raw), kunList = getKun(raw);
-  $("onYomi").textContent = onList.length ? onList.join("、 ") : "—";
-  $("kunYomi").textContent = kunList.length ? kunList.join("、 ") : "—";
+  $("onYomi").innerHTML = sayListHtml(onList);
+  $("kunYomi").innerHTML = sayListHtml(kunList);
+  setSay($("onSayAll"), sayAll(onList));
+  setSay($("kunSayAll"), sayAll(kunList));
 
   const tags = [];
   if (raw.strokes != null) tags.push(raw.strokes + " strokes");
@@ -425,6 +438,7 @@ function renderBrowse() {
   const example = raw.example;
   if (example && example.jp) {
     $("exampleJp").textContent = example.jp;
+    setSay($("exampleSay"), example.jp);
     $("exampleEn").textContent = example.en || "";
     $("exampleBlock").style.display = "";
   } else {
@@ -434,8 +448,9 @@ function renderBrowse() {
   const vocab = raw.vocab;
   if (vocab && vocab.length) {
     $("vocabList").innerHTML = vocab.map(item => `<div class="vocabItem">
-      <span class="vocabWord">${escapeHtml(item.word)}</span>
+      <span class="vocabWord say" data-say="${escapeHtml(item.reading || item.word)}">${escapeHtml(item.word)}</span>
       <span class="vocabReading">（${escapeHtml(item.reading)}）</span>
+      <span class="sayBtn" data-say="${escapeHtml(item.reading || item.word)}">&#128264;</span>
       <div class="vocabMeaning">${escapeHtml(item.meaning)}</div>
     </div>`).join("");
     $("vocabBlock").style.display = "";
@@ -593,6 +608,84 @@ document.addEventListener("touchmove", (e) => {
   if (!e.target.closest(".overlayBody") && !e.target.closest("#detailPanel")) e.preventDefault();
 }, { passive: false });
 document.addEventListener("gesturestart", (e) => e.preventDefault());
+
+// ---------------- pronunciation (browser text-to-speech) ----------------
+// Uses the device's Japanese voice (Google 日本語 in Chrome, Kyoko on iPhone/iPod,
+// Microsoft Haruka/Ayumi on Windows if the Japanese speech pack is installed).
+const tts = { voice: null };
+
+// Readings in the data look like "ひと.つ" / "-じん" / "あ.がる": drop the markers before speaking.
+function sayText(r) { return String(r).replace(/[.\-]/g, ""); }
+function sayAll(list) { return [...new Set(list.map(sayText))].join("、"); }
+function sayListHtml(list) {
+  if (!list.length) return "—";
+  return list.map(r => `<span class="say" data-say="${escapeHtml(sayText(r))}">${escapeHtml(r)}</span>`).join("、 ");
+}
+function setSay(el, text) {
+  if (text) { el.dataset.say = text; el.style.display = ""; }
+  else { delete el.dataset.say; el.style.display = "none"; }
+}
+
+function pickJaVoice() {
+  if (!("speechSynthesis" in window)) return null;
+  const ja = speechSynthesis.getVoices().filter(v => /^ja([-_]|$)/i.test(v.lang));
+  const online = navigator.onLine !== false;
+  tts.voice =
+    (online && ja.find(v => /google/i.test(v.name))) ||
+    ja.find(v => v.localService) ||
+    ja[0] || null;
+  return tts.voice;
+}
+if ("speechSynthesis" in window) {
+  pickJaVoice();
+  speechSynthesis.addEventListener && speechSynthesis.addEventListener("voiceschanged", pickJaVoice);
+}
+
+let toastTimer = null;
+function showToast(msg, ms) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.style.display = "block";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.style.display = "none"; }, ms || 3500);
+}
+
+function speak(text, el) {
+  if (!text) return;
+  if (!("speechSynthesis" in window)) { showToast("This browser can't play speech."); return; }
+  if (!tts.voice) pickJaVoice();
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "ja-JP";
+  if (tts.voice) u.voice = tts.voice;
+  u.rate = 0.85;
+  if (el) {
+    el.classList.add("speaking");
+    u.onend = u.onerror = () => el.classList.remove("speaking");
+  }
+  u.onerror = (e) => {
+    if (el) el.classList.remove("speaking");
+    // An online voice failed (e.g. no internet): retry once with a voice built into the device.
+    if (tts.voice && !tts.voice.localService && e.error !== "canceled" && e.error !== "interrupted") {
+      const local = speechSynthesis.getVoices().find(v => /^ja/i.test(v.lang) && v.localService);
+      if (local) { tts.voice = local; speak(text, el); return; }
+    }
+    if (e.error !== "canceled" && e.error !== "interrupted") showNoVoiceHelp();
+  };
+  speechSynthesis.speak(u);
+  if (!tts.voice && speechSynthesis.getVoices().length) showNoVoiceHelp();
+}
+function showNoVoiceHelp() {
+  showToast("No Japanese voice found. On Windows: Settings → Time & language → Speech → Add voices → Japanese. On iPhone/iPod: Settings → Accessibility → Spoken Content → Voices → Japanese.", 7000);
+}
+
+// One tap handler for every speaker icon / underlined reading.
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-say]");
+  if (!el) return;
+  e.stopPropagation();
+  speak(el.dataset.say, el);
+});
 
 // ---------------- writing practice (stroke order) ----------------
 // Stroke paths come from KanjiVG (109x109 units, strokes in the correct order and
@@ -772,7 +865,8 @@ function renderWriteHeader() {
   $("writeTitle").textContent = recall ? "Write from memory" : "Write " + write.char;
   $("writePromptMeaning").textContent = getMeanings(raw).slice(0, 3).join(", ") || " ";
   const readings = [...getOn(raw).slice(0, 2), ...getKun(raw).slice(0, 2)];
-  $("writePromptReading").textContent = readings.join("、 ");
+  $("writePromptReading").innerHTML = sayListHtml(readings) +
+    (readings.length ? ` <span class="sayBtn" data-say="${escapeHtml(sayAll(readings))}">&#128264;</span>` : "");
   document.querySelectorAll("#writeModeChips .chip").forEach(c =>
     c.classList.toggle("activeChip", c.dataset.mode === write.mode));
 }
