@@ -691,8 +691,9 @@ document.addEventListener("click", (e) => {
 // Stroke paths come from KanjiVG (109x109 units, strokes in the correct order and
 // direction). Fetched on first use per kanji, then cached in localStorage.
 const KVG_URLS = [
-  (hex) => "https://cdn.jsdelivr.net/gh/KanjiVG/kanjivg@master/kanji/" + hex + ".svg",
-  (hex) => "https://raw.githubusercontent.com/KanjiVG/kanjivg/master/kanji/" + hex + ".svg"
+  // GitHub first: jsDelivr now refuses most KanjiVG files (repo is over its 50 MB limit).
+  (hex) => "https://raw.githubusercontent.com/KanjiVG/kanjivg/master/kanji/" + hex + ".svg",
+  (hex) => "https://cdn.jsdelivr.net/gh/KanjiVG/kanjivg@master/kanji/" + hex + ".svg"
 ];
 const SVGNS = "http://www.w3.org/2000/svg";
 const WRITE_STATS_KEY = "kanjiWriteStats";
